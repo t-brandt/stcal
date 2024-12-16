@@ -1,7 +1,9 @@
 import logging
 import multiprocessing
 import time
+import bottleneck as bn
 import warnings
+from scipy import signal
 
 import numpy as np
 import cv2 as cv
@@ -253,8 +255,8 @@ def detect_jumps(
     err = inerr * gain_2d
     readnoise_2d *= gain_2d
     # also apply to the after_jump thresholds
-    after_jump_flag_e1 = after_jump_flag_dn1 * np.nanmedian(gain_2d)
-    after_jump_flag_e2 = after_jump_flag_dn2 * np.nanmedian(gain_2d)
+    after_jump_flag_e1 = after_jump_flag_dn1 * bn.nanmedian(gain_2d)
+    after_jump_flag_e2 = after_jump_flag_dn2 * bn.nanmedian(gain_2d)
     # Apply the 2-point difference method as a first pass
     log.info("Executing two-point difference method")
     start = time.time()
@@ -930,25 +932,28 @@ def find_faint_extended(
         log.warning("Not enough differences for shower detections")
         return ingdq, 0
     read_noise_2 = readnoise_2d**2
-    jump_dnu_flag = jump_flag + donotuse_flag
-    sat_dnu_flag = sat_flag + donotuse_flag
-    data[gdq == jump_dnu_flag] = np.nan
-    data[gdq == sat_dnu_flag] = np.nan
-    data[gdq == sat_flag] = np.nan
-    data[gdq == jump_flag] = np.nan
-    data[gdq == donotuse_flag] = np.nan
+
+    # Any pixel with jump, donotuse, and/or saturation -> np.nan
+    jump_dnu_sat_flag = jump_flag | donotuse_flag | sat_flag
+    data[(gdq & jump_dnu_sat_flag) != 0] = np.nan
+
     refy, refx = np.where(pdq == refpix_flag)
-    gdq[:, :, refy, refx] = donotuse_flag
+
+    # I think we want |= here, but reference pixels should already
+    # be set to donotuse.
+    gdq[:, :, refy, refx] |= donotuse_flag
     first_diffs = np.diff(data, axis=1)
 
     all_ellipses = []
 
-    first_diffs_masked = np.ma.masked_array(first_diffs, mask=np.isnan(first_diffs))
     warnings.filterwarnings("ignore")
     if nints >= minimum_sigclip_groups:
-        mean, median, stddev = stats.sigma_clipped_stats(first_diffs_masked, sigma=5, axis=0)
+        # NaNs are automatically ignored by sigma_clipped_stats;
+        # no need for further masking.
+        mean, median, stddev = stats.sigma_clipped_stats(first_diffs, sigma=5, axis=0)
     else:
-        median_diffs = np.nanmedian(first_diffs_masked, axis=(0, 1))
+        newshape = tuple([-1] + list(first_diffs.shape)[2:])
+        median_diffs = bn.nanmedian(first_diffs.reshape(newshape), axis=0)
         sigma = np.sqrt(np.abs(median_diffs) + read_noise_2 / nframes)
 
     for intg in range(nints):
@@ -956,18 +961,19 @@ def find_faint_extended(
         if nints < minimum_sigclip_groups:
             # The difference from the median difference for each group
             if intg > 0:
-                e_jump = first_diffs_masked[intg] - median_diffs[np.newaxis, :, :]
+                e_jump = first_diffs[intg] - median_diffs[np.newaxis, :, :]
 
                 # SNR ratio of each diff.
                 ratio = np.abs(e_jump) / sigma[np.newaxis, :, :]
             else:
-                median_diffs = np.nanmedian(first_diffs_masked[intg], axis=0)
+                median_diffs = bn.nanmedian(first_diffs[intg], axis=0)
                 sigma = np.sqrt(np.abs(median_diffs) + read_noise_2 / nframes)
                 # The difference from the median difference for each group
-                e_jump = first_diffs_masked[intg] - median_diffs[np.newaxis, :, :]
+                e_jump = first_diffs[intg] - median_diffs[np.newaxis, :, :]
                 # SNR ratio of each diff.
                 ratio = np.abs(e_jump) / sigma[np.newaxis, :, :]
-                median_diffs = np.nanmedian(first_diffs_masked, axis=(0, 1))
+                newshape = tuple([-1] + list(first_diffs.shape)[2:])
+                median_diffs = bn.nanmedian(first_diffs.reshape(newshape), axis=0)
                 sigma = np.sqrt(np.abs(median_diffs) + read_noise_2 / nframes)
         #  The convolution kernel creation
         ring_2D_kernel = Ring2DKernel(inner, outer)
@@ -976,38 +982,41 @@ def find_faint_extended(
             if nints >= minimum_sigclip_groups:
                 median_diffs = median[grp - 1]
                 sigma = stddev[grp - 1]
-                # The difference from the median difference for each group
-                e_jump = first_diffs_masked[intg] - median_diffs[np.newaxis, :, :]
-                # SNR ratio of each diff.
-                ratio = np.abs(e_jump) / sigma[np.newaxis, :, :]
-            masked_ratio = ratio[grp - 1].copy()
+                # The difference from the median difference for this group
+                e_jump = first_diffs[intg, grp - 1] - median_diffs
+                # SNR of this diff.
+                ratio = np.abs(e_jump)/sigma
+                masked_ratio = ratio.copy()
+            else:
+                masked_ratio = ratio[grp - 1].copy()
 
-            #  mask pixels that are already flagged as jump
+            #  mask pixels that are already flagged as jump, sat, or dnu
             combined_pixel_mask = np.bitwise_or(gdq[intg, grp, :, :], pdq[:, :])
-            jump_pixels_array = np.bitwise_and(combined_pixel_mask, jump_flag)
-            jumpy, jumpx = np.where(jump_pixels_array == jump_flag)
-            masked_ratio[jumpy, jumpx] = np.nan
 
-            #  mask pixels that are already flagged as sat.
-            sat_pixels_array = np.bitwise_and(combined_pixel_mask, sat_flag)
-            saty, satx = np.where(sat_pixels_array == sat_flag)
-            masked_ratio[saty, satx] = np.nan
+            jump_sat_or_dnu = np.bitwise_and(combined_pixel_mask, jump_flag|sat_flag|donotuse_flag) != 0
+            masked_ratio[jump_sat_or_dnu] = np.nan
 
-            #  mask pixels that are already flagged as do not use
-            dnu_pixels_array = np.bitwise_and(combined_pixel_mask, 1)
-            dnuy, dnux = np.where(dnu_pixels_array == 1)
-            masked_ratio[dnuy, dnux] = np.nan
+            kernel = ring_2D_kernel.array
 
-            masked_smoothed_ratio = convolve(masked_ratio.filled(np.nan), ring_2D_kernel)
-            #  mask out the pixels that got refilled by the convolution
-            masked_smoothed_ratio[dnuy, dnux] = np.nan
-            masked_smoothed_ratio[saty, satx] = np.nan
-            masked_smoothed_ratio[jumpy, jumpx] = np.nan
-            nrows = ratio.shape[1]
-            ncols = ratio.shape[2]
-            extended_emission = np.zeros(shape=(nrows, ncols), dtype=np.uint8)
-            exty, extx = np.where(masked_smoothed_ratio > snr_threshold)
-            extended_emission[exty, extx] = 1
+            # We will mask nan pixels by setting them to zero.  We
+            # will convolve by our kernel, then divide by the weight
+            # given by the valid pixels convolved with the kernel in
+            # order to normalize.  Finally, we will reset the
+            # initially nan pixels to nan.
+            #
+            # These lines are equivalent to
+            # masked_smoothed_ratio = convolve(masked_ratio, ring_2D_kernel, preserve_nan=True)
+            # but run in about half the time.
+
+            good = np.isfinite(masked_ratio)
+            masked_ratio[~good] = 0
+            masked_smoothed_ratio = signal.oaconvolve(masked_ratio, kernel, mode='same')
+            norm = signal.oaconvolve(1.*good, kernel, mode='same')
+            masked_smoothed_ratio /= norm
+            masked_smoothed_ratio[~good] = np.nan
+
+            extended_emission = np.zeros(shape=masked_smoothed_ratio.shape, dtype=np.uint8)
+            extended_emission[masked_smoothed_ratio > snr_threshold] = 1
 
             #  find the contours of the extended emission
             contours, hierarchy = cv.findContours(extended_emission, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE)
