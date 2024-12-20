@@ -1122,22 +1122,10 @@ def find_faint_extended(
 
             kernel = ring_2D_kernel.array
 
-            # We will mask nan pixels by setting them to zero.  We
-            # will convolve by our kernel, then divide by the weight
-            # given by the valid pixels convolved with the kernel in
-            # order to normalize.  Finally, we will reset the
-            # initially nan pixels to nan.
-            #
-            # These lines are equivalent to
+            # Equivalent to but faster than
             # masked_smoothed_ratio = convolve(masked_ratio, ring_2D_kernel, preserve_nan=True)
-            # but run in about half the time.
 
-            good = np.isfinite(masked_ratio)
-            masked_ratio[~good] = 0
-            masked_smoothed_ratio = signal.oaconvolve(masked_ratio, kernel, mode='same')
-            norm = signal.oaconvolve(1.*good, kernel, mode='same')
-            masked_smoothed_ratio /= norm
-            masked_smoothed_ratio[~good] = np.nan
+            masked_smoothed_ratio = convolve_fast(masked_ratio, kernel)
 
             extended_emission = np.zeros(shape=masked_smoothed_ratio.shape, dtype=np.uint8)
             extended_emission[masked_smoothed_ratio > snr_threshold] = 1
@@ -1282,3 +1270,64 @@ def calc_num_slices(n_rows, max_cores, max_available):
         n_slices = max_available
     # Make sure we don't have more slices than rows or available cores.
     return min([n_rows, n_slices, max_available])
+
+
+def convolve_fast(inarray, kernel, copy=False):
+    """Faster version of astropy.convolution.convolve(preserve_nan=True)
+
+    Parameters
+    ----------
+    inarray : 2D array of floats
+        Array for convolution
+
+    kernel : 2D array of floats
+        Convolution kernel.  Both dimensions must be odd.
+
+    copy : bool
+        Make a copy of inarray to avoid modifying NaN values.  Default False.
+
+    Returns
+    -------
+    convolved_array : 2D array of floats
+        Convolution of inarray and kernel, interpolating over NaNs.
+    """
+
+    # We will mask nan pixels by setting them to zero.  We
+    # will convolve by our kernel, then divide by the weight
+    # given by the valid pixels convolved with the kernel in
+    # order to normalize.  Finally, we will reset the
+    # initially nan pixels to nan.
+    #
+    # This function is equivalent to
+    # convolved_array = astropy.convolution.convolve(inarray, kernel, preserve_nan=True)
+    # but runs in about half the time.
+
+    if copy:
+        array = inarray.copy()
+    else:
+        array = inarray
+
+    good = np.isfinite(array)
+    array[~good] = 0
+
+    convolved_array = signal.oaconvolve(array, kernel, mode='same')
+
+    # Embed the flag in a larger array to reproduce the behavior at
+    # the edge with a fill value of zero.
+
+    padded_good_arr = np.ones((good.shape[0] + kernel.shape[0] - 1,
+                               good.shape[1] + kernel.shape[1] - 1))
+    n = kernel.shape[0]//2
+    padded_good_arr[n:-n, n:-n] = good
+    norm = signal.oaconvolve(padded_good_arr, kernel, mode='valid')
+
+    # Avoid dividing by a tiny number due to roundoff error.
+
+    good &= norm > 1e-3*np.mean(kernel)
+    convolved_array /= norm
+
+    # Replace NaNs
+
+    convolved_array[~good] = np.nan
+
+    return convolved_array
