@@ -605,9 +605,9 @@ def flag_large_events(
                 max_extended_radius=max_extended_radius,
             )
 
-    #  Test to see if the flagging of the saturated cores will be extended into the
-    #  subsequent integrations. Persist_jumps contains all the pixels that were saturated
-    #  in the cores of snowballs.
+    # Test to see if the flagging of the saturated cores will be
+    # extended into the subsequent integrations. Persist_jumps contains
+    # all the pixels that were saturated in the cores of snowballs.
     if mask_persist_grps_next_int:
         for intg in range(1, nints):
             if persist_grps_flagged >= 1:
@@ -617,14 +617,52 @@ def flag_large_events(
                                                                     last_grp_flagged - 1, axis=0))
     return gdq, total_snowballs
 
-def extend_saturation(
-    cube, grp, sat_ellipses, sat_flag, jump_flag, min_sat_radius_extend, persist_jumps,
-    expansion=2, max_extended_radius=200
-):
+
+def extend_saturation(cube, grp, sat_ellipses, sat_flag, jump_flag,
+                      min_sat_radius_extend, persist_jumps,
+                      expansion=2, max_extended_radius=200):
+
+    """Expand saturation-flagging ellipses and apply them to the DQ array
+
+    Operates on a DQ array in-place.
+
+    Parameters
+    ----------
+    cube : unsigned int, 3D array
+        The DQ array of the integration.  Will be modified in-place
+        and returned.
+
+    sat_ellipses : list of lists
+        Parameters of the ellipses enclosing saturation clusters
+
+    grp : int
+        Group of the saturation ellipses.
+
+    sat_flag : unsigned int
+        Binary flag denoting saturation in the DQ array
+
+    jump_flag : unsigned int
+        Binary flag denoting a detected jump in the DQ array
+
+    min_sat_radius_extend : int
+        Minimum number of pixels by which to extend the saturation
+
+    persist_jumps : unsigned int, 2D array
+        DQ-like array mapping the impact of persistence from
+        saturation of neighbors in this integration.  Will be
+        modified in-place and returned.
+
+    Returns
+    -------
+    cube : unsigned int, 3D array
+        The input DQ cube as modified
+
+    persist_jumps : unsigned int, 2D array
+        The input array as modified
+
+    """
     ngroups, nrows, ncols = cube.shape
-    image = np.zeros(shape=(nrows, ncols, 3), dtype=np.uint8)
-    persist_image = np.zeros(shape=(nrows, ncols, 3), dtype=np.uint8)
-    outcube = cube.copy()
+
     for ellipse in sat_ellipses:
         ceny = ellipse[0][0]
         cenx = ellipse[0][1]
@@ -635,69 +673,174 @@ def extend_saturation(
             alpha = ellipse[2]
             axis1 = min(axis1, max_extended_radius)
             axis2 = min(axis2, max_extended_radius)
-            image = cv.ellipse(
-                image,
-                (round(ceny), round(cenx)),
-                (round(axis1 / 2), round(axis2 / 2)),
-                alpha,
-                0,
-                360,
-                (0, 0, 22),  # in the RGB cube, set blue plane pixels of the ellipse to 22
-                -1,
-            )
-            #  Create another non-extended ellipse that is used to create the
-            #  persist_jumps for this integration. This will be used to mask groups
-            #  in subsequent integrations.
-            sat_ellipse = image[:, :, 2]  # extract the Blue plane of the image
-            saty, satx = np.where(sat_ellipse == 22)  # find all the ellipse pixels in the ellipse
-            outcube[grp:, saty, satx] = sat_flag
-            persist_image = cv.ellipse(
-                persist_image,
-                (round(ceny), round(cenx)),
-                (round(ellipse[1][0] / 2), round(ellipse[1][1] / 2)),
-                alpha,
-                0,
-                360,
-                (0, 0, 22),
-                -1,
-            )
-            persist_ellipse = persist_image[:, :, 2]
-            persist_saty, persist_satx = np.where(persist_ellipse == 22)
-            persist_jumps[persist_saty, persist_satx] = jump_flag
-    return outcube, persist_jumps
+
+            tmpflag = 22   # A value to flag saturation in images
+            indx, sat_ellipse = ellipse_subim(ceny, cenx, axis1, axis2,
+                                              alpha, tmpflag, (nrows, ncols))
+            (iy1, iy2, ix1, ix2) = indx
+
+            # Create another non-extended ellipse that is used to
+            # create the persist_jumps for this integration. This
+            # will be used to mask groups in subsequent integrations.
+
+            is_sat = sat_ellipse == tmpflag
+            for i in range(grp, cube.shape[0]):
+                cube[i][iy1:iy2, ix1:ix2][is_sat] = sat_flag
+
+            ax1, ax2 = (ellipse[1][0], ellipse[1][1])
+            indx, persist_ellipse = ellipse_subim(ceny, cenx, ax1, ax2,
+                                                  alpha, tmpflag, (nrows, ncols))
+            (iy1, iy2, ix1, ix2) = indx
+
+            persist_mask = persist_ellipse == tmpflag
+            persist_jumps[iy1:iy2, ix1:ix2][persist_mask] = jump_flag
+
+    return cube, persist_jumps
 
 
-def extend_ellipses(
-    gdq_cube,
-    intg,
-    grp,
-    ellipses,
-    sat_flag,
-    jump_flag,
-    expansion=1.9,
-    expand_by_ratio=True,
-    num_grps_masked=1,
-    max_extended_radius=200,
-):
+def ellipse_subim(ceny, cenx, axis1, axis2, alpha, value, shape):
+    """Draw a filled ellipse in a small array at a given (returned) location
+
+    Parameters
+    ----------
+    ceny : float
+        Center of the ellipse in y (second axis of an image)
+
+    cenx : float
+        Center of the ellipse in x (first axis of an image)
+
+    axis1 : float
+        One (full) axis of the ellipse
+
+    axis2 : float
+        The other (full) axis of the ellipse
+
+    alpha : float
+        Angle (in degrees) between axis1 and x
+
+    value : unsigned 8-bit integer
+        Value to fill the image with
+
+    shape : (int, int)
+        The shape of the full 2D array into which the returned
+        subimage should be placed.
+
+    Returns
+    -------
+    indx : (int, int, int, int)
+        Indices (iy1, iy2, ix1, ix2) such that
+        fullimage[iy1:iy2, ix1:ix2] = subimage (see below)
+
+    subimage : 2D 8-bit unsigned int array
+        Small image containing the ellipse, goes into fullimage
+        as described above.
+
+    """
+    yc, xc = round(ceny), round(cenx)
+
+    # How big of a subarray do we need for the subimage?
+
+    dn_over_2 = max(round(axis1/2), round(axis2/2)) + 2
+
+    # Note that the convention between which index is x and which
+    # is y is a little confusing here.  To cv.ellipse, the first
+    # coordinate corresponds to the second Python index.  That is
+    # why x and y are a bit mixed up below.
+
+    ix1 = max(yc - dn_over_2, 0)
+    ix2 = min(yc + dn_over_2 + 1, shape[1])
+    iy1 = max(xc - dn_over_2, 0)
+    iy2 = min(xc + dn_over_2 + 1, shape[0])
+
+    image = np.zeros(shape=(iy2 - iy1, ix2 - ix1, 3), dtype=np.uint8)
+    image = cv.ellipse(
+        image,
+        (yc - ix1, xc - iy1),
+        (round(axis1 / 2), round(axis2 / 2)),
+        alpha,
+        0,
+        360,
+        (0, 0, value),
+        -1,
+    )
+
+    # The last ("blue") part contains the filled ellipse that we want.
+    subimage = image[:, :, 2]
+    return (iy1, iy2, ix1, ix2), subimage
+
+
+def extend_ellipses(gdq_cube, intg, grp, ellipses, sat_flag, jump_flag,
+                    expansion=1.9, expand_by_ratio=True, num_grps_masked=1,
+                    max_extended_radius=200):
+    """Expand snowball-flagging ellipses and apply them to the DQ array
+
+    Operates on a DQ array in-place.
+
+    Parameters
+    ----------
+    gdq_cube : unsigned int, 4D array
+        The DQ array of the data set.  Will be modified in-place
+        and returned.
+
+    intg : int
+        Integration of the snowball ellipses.
+
+    grp : int
+        Group of the snowball ellipses.
+
+    sat_ellipses : list of lists
+        Parameters of the ellipses enclosing snowballs
+
+    sat_flag : unsigned int
+        Binary flag denoting saturation in the DQ array
+
+    jump_flag : unsigned int
+        Binary flag denoting a detected jump in the DQ array
+
+    expansion : float
+        Amount by which to grow each snowball ellipse.
+        Default 1.9
+
+    expand_by_ratio : boolean
+        If True (default), expansion is a multiplicative factor.
+        If False, expansion is a number in pixels.
+
+    num_grps_masked : int
+        Number of successive groups to flag for each detected
+        snowball.  Default 1 (i.e. mask snowball group plus one
+        following group).
+
+    max_extended_radius : int
+        Maximum semimajor axis of an extended snowball ellipse.
+
+    Returns
+    -------
+    gdq_cube : unsigned int, 4D array
+        The input DQ cube as modified
+
+    num_ellipses : int
+        Number of ellipses that were applied to the DQ array.
+
+    """
+
     # For a given DQ plane it will use the list of ellipses to create
     #  expanded ellipses of pixels with
     # the jump flag set.
-    out_gdq_cube = gdq_cube.copy()
-    plane = gdq_cube[intg, grp, :, :].copy()
-    ncols = plane.shape[1]
-    nrows = plane.shape[0]
-    image = np.zeros(shape=(nrows, ncols, 3), dtype=np.uint8)
+
+    ngroups = gdq_cube.shape[1]
+    ncols = gdq_cube.shape[3]
+    nrows = gdq_cube.shape[2]
     num_ellipses = len(ellipses)
+
     for ellipse in ellipses:
         ceny = ellipse[0][0]
         cenx = ellipse[0][1]
-        # Expand the ellipse by the expansion factor. The number of pixels
-        # added to both axes is
-        # the number of pixels added to the minor axis. This prevents very
-        # large flagged ellipses
-        # with high axis ratio ellipses. The major and minor axis are not
-        # always the same index.
-        # Therefore, we have to test to find which is actually the minor axis.
+        # Expand the ellipse by the expansion factor. The number of
+        # pixels added to both axes is the number of pixels added to
+        # the minor axis. This prevents very large flagged ellipses
+        # with high axis ratio ellipses. The major and minor axis are
+        # not always the same index.  Therefore, we have to test to
+        # find which is actually the minor axis.
         if expand_by_ratio:
             if ellipse[1][1] < ellipse[1][0]:
                 axis1 = ellipse[1][0] + (expansion - 1.0) * ellipse[1][1]
@@ -711,50 +854,26 @@ def extend_ellipses(
         axis1 = min(axis1, max_extended_radius)
         axis2 = min(axis2, max_extended_radius)
         alpha = ellipse[2]
-        image = cv.ellipse(
-            image,
-            (round(ceny), round(cenx)),
-            (round(axis1 / 2), round(axis2 / 2)),
-            alpha,
-            0,
-            360,
-            (0, 0, jump_flag),
-            -1,
-        )
-        jump_ellipse = image[:, :, 2]
-        ngrps = gdq_cube.shape[1]
-        last_grp = find_last_grp(grp, ngrps, num_grps_masked)
-        #  This loop will flag the number of groups
-        for flg_grp in range(grp, last_grp):
-            sat_pix = np.bitwise_and(gdq_cube[intg, flg_grp, :, :], sat_flag)
-            saty, satx = np.where(sat_pix == sat_flag)
-            jump_ellipse[saty, satx] = 0
-            out_gdq_cube[intg, flg_grp, :, :] = np.bitwise_or(gdq_cube[intg, flg_grp, :, :], jump_ellipse)
-    diff_cube = out_gdq_cube - gdq_cube
-    return out_gdq_cube, num_ellipses
 
-def find_last_grp(grp, ngrps, num_grps_masked):
-    """
-    Parameters
-    ----------
-    grp : int
-        The location of the shower
+        # Get the expanded ellipse in a subimage, along with the
+        # indices that place this subimage within the full array.
 
-    ngrps : int
-        The number of groups in the integration
+        indx, jump_ellipse = ellipse_subim(ceny, cenx, axis1, axis2,
+                                           alpha, jump_flag, (nrows, ncols))
+        (iy1, iy2, ix1, ix2) = indx
 
-    num_grps_masked : int
-        The requested number of groups to be flagged after the shower
+        # Propagate forward by num_grps_masked groups.
 
-    Returns
-    -------
-    last_grp : int
-        The index of the last group to flag for the shower
+        for flg_grp in range(grp, min(grp + num_grps_masked + 1, ngroups)):
 
-    """
-    num_grps_masked += 1
-    last_grp = min(grp + num_grps_masked, ngrps)
-    return last_grp
+            # Only propagate the snowball forward to unsaturated pixels.
+
+            sat_pix = gdq_cube[intg, flg_grp, iy1:iy2, ix1:ix2] & sat_flag
+            jump_ellipse[sat_pix == sat_flag] = 0
+            gdq_cube[intg, flg_grp, iy1:iy2, ix1:ix2] |= jump_ellipse
+
+    return gdq_cube, num_ellipses
+
 
 def find_circles(dqplane, bitmask, min_area):
     # Using an input DQ plane this routine will find the groups of pixels with at least the minimum
@@ -918,7 +1037,7 @@ def find_faint_extended(
     log.info("Flagging Showers")
     refpix_flag = dqflags["REFERENCE_PIXEL"]
     gdq = ingdq.copy()
-    data = indata.copy()
+    data = indata
     nints = data.shape[0]
     ngrps = data.shape[1]
     num_grps_donotuse = 0
@@ -933,16 +1052,21 @@ def find_faint_extended(
         return ingdq, 0
     read_noise_2 = readnoise_2d**2
 
-    # Any pixel with jump, donotuse, and/or saturation -> np.nan
-    jump_dnu_sat_flag = jump_flag | donotuse_flag | sat_flag
-    data[(gdq & jump_dnu_sat_flag) != 0] = np.nan
-
     refy, refx = np.where(pdq == refpix_flag)
 
     # I think we want |= here, but reference pixels should already
     # be set to donotuse.
     gdq[:, :, refy, refx] |= donotuse_flag
     first_diffs = np.diff(data, axis=1)
+
+    # Any pixel with jump, donotuse, and/or saturation -> np.nan
+    # Do this purely in the differences to avoid making a copy of data.
+
+    jump_dnu_sat_flag = jump_flag | donotuse_flag | sat_flag
+    flag_set_nan = (gdq & jump_dnu_sat_flag) != 0
+
+    first_diffs[flag_set_nan[:, 1:] | flag_set_nan[:, :-1]] = np.nan
+    del flag_set_nan
 
     all_ellipses = []
 
