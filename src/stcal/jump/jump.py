@@ -252,7 +252,8 @@ def detect_jumps(
     # Apply gain to the SCI, ERR, and readnoise arrays so they're in units
     # of electrons
     data = indata * gain_2d
-    err = inerr * gain_2d
+    # err is never used; saving an unneeded array allocation.
+    #err = inerr * gain_2d
     readnoise_2d *= gain_2d
     # also apply to the after_jump thresholds
     after_jump_flag_e1 = after_jump_flag_dn1 * bn.nanmedian(gain_2d)
@@ -314,9 +315,9 @@ def detect_jumps(
 
         # must copy arrays here, find_crs will make copies but if slices
         # are being passed in for multiprocessing then the original gdq will be
-        # modified unless copied beforehand.
+        # modified unless copied beforehand. data was already copied when
+        # scaling the gain.
         gdq = gdq.copy()
-        data = data.copy()
         copy_arrs = False  # we don't need to copy arrays again in find_crs
         for i in range(n_slices - 1):
             slices.insert(
@@ -476,11 +477,6 @@ def detect_jumps(
     elapsed = time.time() - start
     log.info("Total elapsed time = %g sec", elapsed)
 
-    # Back out the applied gain to the SCI, ERR, and readnoise arrays so they're
-    #    back in units of DN
-    data /= gain_2d
-    err /= gain_2d
-    readnoise_2d /= gain_2d
     # Return the updated data quality arrays
     return gdq, pdq, total_primary_crs, number_extended_events, stddev
 
