@@ -477,6 +477,9 @@ def detect_jumps(
     elapsed = time.time() - start
     log.info("Total elapsed time = %g sec", elapsed)
 
+    # Back out the applied gain to the readnoise array so its
+    #    back in units of DN
+    readnoise_2d /= gain_2d
     # Return the updated data quality arrays
     return gdq, pdq, total_primary_crs, number_extended_events, stddev
 
