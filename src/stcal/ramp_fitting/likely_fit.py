@@ -10,7 +10,7 @@ from stcal.ramp_fitting.likely_algo_classes import Covar, IntegInfo, RampResult
 
 DELIM = "=" * 80
 SQRT2 = np.sqrt(2)
-LIKELY_MIN_NGROUPS = 4
+MIN_NGROUPS_JUMP = 4
 
 log = logging.getLogger(__name__)
 
@@ -45,8 +45,11 @@ def likely_ramp_fit(ramp_data, readnoise_2d, gain_2d, jump_data=None):
 
     nints, ngroups, nrows, ncols = ramp_data.data.shape
 
-    if ngroups < LIKELY_MIN_NGROUPS:
-        raise ValueError("Likelihood fit requires at least 4 groups.")
+    if ngroups < 2:
+        raise ValueError("Likelihood fit requires at least 2 groups.")
+    elif ngroups < MIN_NGROUPS_JUMP:
+        log.warning("Fewer than %d groups in ramp." % (MIN_NGROUPS_JUMP))
+        log.warning("Jump detection will be skipped.")
 
     readtimes = get_readtimes(ramp_data)
 
@@ -101,7 +104,16 @@ def likely_ramp_fit(ramp_data, readnoise_2d, gain_2d, jump_data=None):
         for row in range(nrows):
             d2use = determine_diffs2use(row, diff, gdq)
             d2use_copy = d2use.copy()  # Use to flag jumps
-            if ramp_data.rejection_threshold is not None:
+            if ngroups < MIN_NGROUPS_JUMP:
+                result = fit_ramps(
+                    diff[:, row],
+                    covar,
+                    gain_2d[row],
+                    readnoise_2d[row],
+                    diffs2use=d2use,
+                )
+                countrates = result.countrate
+            elif ramp_data.rejection_threshold is not None:
                 threshold_one_omit = ramp_data.rejection_threshold**2
                 pval = scipy.special.erfc(ramp_data.rejection_threshold / SQRT2)
                 threshold_two_omit = scipy.stats.chi2.isf(pval, 2)
