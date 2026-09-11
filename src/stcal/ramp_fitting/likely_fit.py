@@ -11,6 +11,9 @@ from stcal.ramp_fitting.likely_algo_classes import Covar, IntegInfo, RampResult
 DELIM = "=" * 80
 SQRT2 = np.sqrt(2)
 MIN_NGROUPS_JUMP = 4
+# The variable below is used by the JWST pipeline.
+# It may be overridden if desired to use the algorithm with as few as 2 groups.
+LIKELY_MIN_NGROUPS = 4
 
 log = logging.getLogger(__name__)
 
@@ -583,7 +586,7 @@ def fit_ramps(
 
     # diffs is (ngroups, ncols) of the current row
     if count_rate_guess is None:
-        count_rate_guess = initial_count_rate_guess(covar, diffs, diffs2use)
+        count_rate_guess = initial_count_rate_guess(diffs, diffs2use)
 
     alpha_tuple, beta_tuple, scale = compute_alphas_betas(
         count_rate_guess, gain, rnoise, covar, rescale, diffs, dn_scale
