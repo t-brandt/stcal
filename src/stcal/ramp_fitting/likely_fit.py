@@ -10,7 +10,6 @@ from stcal.ramp_fitting.likely_algo_classes import Covar, IntegInfo, RampResult
 
 DELIM = "=" * 80
 SQRT2 = np.sqrt(2)
-MIN_NGROUPS_JUMP = 4
 # The variable below is used by the JWST pipeline.
 # It may be overridden if desired to use the algorithm with as few as 2 groups.
 LIKELY_MIN_NGROUPS = 4
@@ -50,9 +49,6 @@ def likely_ramp_fit(ramp_data, readnoise_2d, gain_2d, jump_data=None):
 
     if ngroups < 2:
         raise ValueError("Likelihood fit requires at least 2 groups.")
-    elif ngroups < MIN_NGROUPS_JUMP:
-        log.warning("Fewer than %d groups in ramp." % (MIN_NGROUPS_JUMP))
-        log.warning("Jump detection will be skipped.")
 
     readtimes = get_readtimes(ramp_data)
 
@@ -75,6 +71,19 @@ def likely_ramp_fit(ramp_data, readnoise_2d, gain_2d, jump_data=None):
             use_zeroframe = True
 
     covar = Covar(readtimes)
+
+    # Jump detection requires four groups (three differences) if we are
+    # looking for intergroup (single difference) jumps.  If we are looking
+    # for intragroup (two difference) jumps, we need at least five groups.
+    if np.all(covar.Nreads == 1):
+        min_ngroups_jump = 4
+    else:
+        min_ngroups_jump = 5
+
+    if ngroups < min_ngroups_jump:
+        log.warning("Fewer than %d groups in ramp." % (min_ngroups_jump))
+        log.warning("Jump detection will be skipped.")
+
     integ_class = IntegInfo(nints, nrows, ncols)
 
     readnoise_2d = readnoise_2d / SQRT2
@@ -107,7 +116,7 @@ def likely_ramp_fit(ramp_data, readnoise_2d, gain_2d, jump_data=None):
         for row in range(nrows):
             d2use = determine_diffs2use(diff[:, row, :], gdq[:, row, :])
             d2use_copy = d2use.copy()  # Use to flag jumps
-            if ngroups < MIN_NGROUPS_JUMP:
+            if ngroups < min_ngroups_jump:
                 with warnings.catch_warnings():
                     warnings.simplefilter("ignore")
                     result = fit_ramps(
@@ -270,14 +279,6 @@ def mask_jumps(
     # boolean arrays to be used later
     recheck = np.ones(loc_diff.shape[1]) == 1
 
-    # Do not try to search for bad resultants if we have already
-    # given up on all but one, two, or three resultant differences
-    # in the ramp.  If there are only two left we have no way of
-    # choosing which one is "good".  If there are three left we
-    # run into trouble in case we need to discard two.
-
-    insufficient_groups = np.sum(diffs2use, axis=0)[None, :] <= 3
-
     dropped = np.ones(loc_diff.shape[1]) == 0
 
     for j in range(loc_diff.shape[0]):
@@ -315,6 +316,14 @@ def mask_jumps(
         best_dchisq_one = np.amax(dchisq_one * one_omit_ok[:, np.newaxis], axis=0)
         best_dchisq_two = np.amax(dchisq_two * two_omit_ok[:, np.newaxis], axis=0)
 
+        # We need at least three differences to flag an intergroup jump,
+        # and at least four differences to flags an intragroup jump.
+        # If there is an intragroup jump two differences are affected,
+        # and if we have only three groups, we cannot tell which one of
+        # the three is "good".
+        best_dchisq_one *= np.sum(diffs2use[:, recheck], axis=0) >= 3
+        best_dchisq_two *= np.sum(diffs2use[:, recheck], axis=0) >= 4
+
         # Is the best improvement from dropping one resultant
         # difference or two?  Two drops will always offer more
         # improvement than one so penalize them by the respective
@@ -329,11 +338,6 @@ def mask_jumps(
         # If nothing exceeded the threshold set the improvement to
         # NaN so that dchisq==best_dchisq is guaranteed to be False.
         best_dchisq[best_dchisq == 0] = np.nan
-
-        # If this is the first iteration (where we check every pixel) and
-        # we don't have enough groups to flag jumps, ensure we don't.
-        if j == 0:
-            best_dchisq[insufficient_groups] = np.nan
 
         # Now make the masks for which resultant difference(s) to
         # drop, count the number of ramps affected, and drop them.
@@ -369,13 +373,6 @@ def mask_jumps(
         dropped[:] = False
         dropped[recheck] = drop
         recheck[:] = dropped
-
-        # Do not try to search for bad resultants if we have already
-        # given up on all but one, two, or three resultant differences
-        # in the ramp.  If there are only two left we have no way of
-        # choosing which one is "good".  If there are three left we
-        # run into trouble in case we need to discard two.
-        recheck[np.sum(diffs2use, axis=0) <= 3] = False
 
     return diffs2use, countrate
 
