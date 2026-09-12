@@ -81,7 +81,7 @@ def likely_ramp_fit(ramp_data, readnoise_2d, gain_2d, jump_data=None):
         min_ngroups_jump = 5
 
     if ngroups < min_ngroups_jump:
-        log.warning("Fewer than %d groups in ramp." % (min_ngroups_jump))
+        log.warning(f"Fewer than {min_ngroups_jump} groups in ramp.")
         log.warning("Jump detection will be skipped.")
 
     integ_class = IntegInfo(nints, nrows, ncols)
