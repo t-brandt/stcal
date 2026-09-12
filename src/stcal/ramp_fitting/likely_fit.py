@@ -270,8 +270,13 @@ def mask_jumps(
     # boolean arrays to be used later
     recheck = np.ones(loc_diff.shape[1]) == 1
 
-    # If we don't have enough groups in a pixel to flag jumps, do not try.
-    insufficient_groups = np.sum(diffs2use, axis=0)[None, :] < MIN_NGROUPS_JUMP
+    # Do not try to search for bad resultants if we have already
+    # given up on all but one, two, or three resultant differences
+    # in the ramp.  If there are only two left we have no way of
+    # choosing which one is "good".  If there are three left we
+    # run into trouble in case we need to discard two.
+
+    insufficient_groups = np.sum(diffs2use, axis=0)[None, :] <= 3
 
     dropped = np.ones(loc_diff.shape[1]) == 0
 
