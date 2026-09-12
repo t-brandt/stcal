@@ -269,6 +269,10 @@ def mask_jumps(
 
     # boolean arrays to be used later
     recheck = np.ones(loc_diff.shape[1]) == 1
+
+    # If we don't have enough groups in a pixel to flag jumps, do not try.
+    insufficient_groups = np.sum(diffs2use, axis=0)[None, :] < MIN_NGROUPS_JUMP
+
     dropped = np.ones(loc_diff.shape[1]) == 0
 
     for j in range(loc_diff.shape[0]):
@@ -286,6 +290,7 @@ def mask_jumps(
             # Also save the count rates so that we can use them later
             # for debiasing.
             countrate = result.countrate * 1.0
+
         else:
             result = fit_ramps(
                 loc_diff[:, recheck],
@@ -319,6 +324,11 @@ def mask_jumps(
         # If nothing exceeded the threshold set the improvement to
         # NaN so that dchisq==best_dchisq is guaranteed to be False.
         best_dchisq[best_dchisq == 0] = np.nan
+
+        # If this is the first iteration (where we check every pixel) and
+        # we don't have enough groups to flag jumps, ensure we don't.
+        if j == 0:
+            best_dchisq[insufficient_groups] = np.nan
 
         # Now make the masks for which resultant difference(s) to
         # drop, count the number of ramps affected, and drop them.
