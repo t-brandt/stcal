@@ -108,13 +108,15 @@ def likely_ramp_fit(ramp_data, readnoise_2d, gain_2d, jump_data=None):
             d2use = determine_diffs2use(row, diff, gdq)
             d2use_copy = d2use.copy()  # Use to flag jumps
             if ngroups < MIN_NGROUPS_JUMP:
-                result = fit_ramps(
-                    diff[:, row],
-                    covar,
-                    gain_2d[row],
-                    readnoise_2d[row],
-                    diffs2use=d2use,
-                )
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    result = fit_ramps(
+                        diff[:, row],
+                        covar,
+                        gain_2d[row],
+                        readnoise_2d[row],
+                        diffs2use=d2use,
+                    )
                 countrates = result.countrate
             elif ramp_data.rejection_threshold is not None:
                 threshold_one_omit = ramp_data.rejection_threshold**2
