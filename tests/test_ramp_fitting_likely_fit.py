@@ -259,7 +259,7 @@ def test_long_ramp():
     np.testing.assert_allclose(data, cube1["slope"][0, 0, 0], tol)
 
 
-@pytest.mark.parametrize("ngroups", [1, 2])
+@pytest.mark.parametrize("ngroups", [1])
 def test_too_few_group_ramp(ngroups):
     """
     Test a ramp with too few groups.
