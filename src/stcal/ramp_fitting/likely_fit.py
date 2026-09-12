@@ -319,8 +319,9 @@ def mask_jumps(
         # If there is an intragroup jump two differences are affected,
         # and if we have only three groups, we cannot tell which one of
         # the three is "good".
-        best_dchisq_one *= np.sum(diffs2use[:, recheck], axis=0) >= 3
-        best_dchisq_two *= np.sum(diffs2use[:, recheck], axis=0) >= 4
+        num_valid_diffs = np.sum(diffs2use[:, recheck], axis=0)
+        best_dchisq_one[num_valid_diffs < 3] = 0
+        best_dchisq_two[num_valid_diffs < 4] = 0
 
         # Is the best improvement from dropping one resultant
         # difference or two?  Two drops will always offer more
