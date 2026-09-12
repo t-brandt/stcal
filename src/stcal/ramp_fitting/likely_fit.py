@@ -10,8 +10,8 @@ from stcal.ramp_fitting.likely_algo_classes import Covar, IntegInfo, RampResult
 
 DELIM = "=" * 80
 SQRT2 = np.sqrt(2)
-# The variable below is used by the JWST pipeline.
-# It may be overridden if desired to use the algorithm with as few as 2 groups.
+# The variable below is used by the JWST pipeline.  In the future, it may
+# be overridden if desired to use the algorithm  with as few as 2 groups.
 LIKELY_MIN_NGROUPS = 4
 
 log = logging.getLogger(__name__)
@@ -278,7 +278,6 @@ def mask_jumps(
 
     # boolean arrays to be used later
     recheck = np.ones(loc_diff.shape[1]) == 1
-
     dropped = np.ones(loc_diff.shape[1]) == 0
 
     for j in range(loc_diff.shape[0]):
@@ -296,7 +295,6 @@ def mask_jumps(
             # Also save the count rates so that we can use them later
             # for debiasing.
             countrate = result.countrate * 1.0
-
         else:
             result = fit_ramps(
                 loc_diff[:, recheck],
