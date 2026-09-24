@@ -17,7 +17,7 @@ LIKELY_MIN_NGROUPS = 4
 log = logging.getLogger(__name__)
 
 
-def likely_ramp_fit(ramp_data, readnoise_2d, gain_2d, jump_data=None):
+def likely_ramp_fit(ramp_data, readnoise_2d, gain_2d, jump_data=None, skip_jump_detect=False):
     """
     Invoke ramp fitting using the likelihood algorithm.
 
@@ -33,6 +33,8 @@ def likely_ramp_fit(ramp_data, readnoise_2d, gain_2d, jump_data=None):
         Class containing parameters and methods to detect jumps.  Used here
         to access the snowball algorithm via jump.flag_large_events.  If None,
         do not apply flag_large_events.  Default None.
+    skip_jump_detect : bool, optional
+        Skip likelihood-based jump detection?  Default False.
 
     Returns
     -------
@@ -116,7 +118,10 @@ def likely_ramp_fit(ramp_data, readnoise_2d, gain_2d, jump_data=None):
         for row in range(nrows):
             d2use = determine_diffs2use(diff[:, row, :], gdq[:, row, :])
             d2use_copy = d2use.copy()  # Use to flag jumps
-            if ngroups < min_ngroups_jump:
+
+            # Skip the jump step if this behavior was requested or
+            # if we have insufficiently many groups/resultants
+            if skip_jump_detect or ngroups < min_ngroups_jump:
                 with warnings.catch_warnings():
                     warnings.simplefilter("ignore")
                     result = fit_ramps(
