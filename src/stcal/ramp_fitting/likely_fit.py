@@ -10,9 +10,9 @@ from stcal.ramp_fitting.likely_algo_classes import Covar, IntegInfo, RampResult
 
 DELIM = "=" * 80
 SQRT2 = np.sqrt(2)
-# The variable below is used by the JWST pipeline.  In the future, it may
-# be overridden if desired to use the algorithm  with as few as 2 groups.
-LIKELY_MIN_NGROUPS = 4
+# The likelihood fit requires at least two groups so that there is
+# a measured group difference.
+LIKELY_MIN_NGROUPS = 2
 
 log = logging.getLogger(__name__)
 
@@ -49,8 +49,8 @@ def likely_ramp_fit(ramp_data, readnoise_2d, gain_2d, jump_data=None, skip_jump_
 
     nints, ngroups, nrows, ncols = ramp_data.data.shape
 
-    if ngroups < 2:
-        raise ValueError("Likelihood fit requires at least 2 groups.")
+    if ngroups < LIKELY_MIN_NGROUPS:
+        raise ValueError(f"Likelihood fit requires at least {LIKELY_MIN_NGROUPS} groups.")
 
     readtimes = get_readtimes(ramp_data)
 
